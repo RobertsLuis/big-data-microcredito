@@ -12,7 +12,7 @@ provider "aiven" {
   api_token = var.aiven_api_token
 }
 
-# PostgreSQL Aiven — plano Free Tier (1 GB)
+# PostgreSQL Aiven - plano Free Tier (1 GB)
 resource "aiven_pg" "microcredito_db" {
   project      = var.aiven_project_name
   cloud_name   = var.cloud_region

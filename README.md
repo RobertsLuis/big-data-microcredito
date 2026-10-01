@@ -1,188 +1,167 @@
-# Big Data & Analytics — Acesso a Microcrédito e Inclusão Financeira Regional
+# Big Data e Analytics: Acesso a Microcredito e Inclusao Financeira Regional
 
-**Disciplina:** Big Data e Analytics  
-**Tema 05:** Acesso a Microcrédito e Inclusão Financeira Regional  
-**Fonte:** SCR.data — Sistema de Informações de Crédito do Banco Central do Brasil  
-**ODS:** 5 (Igualdade de Gênero) · 8 (Trabalho Decente) · 10 (Redução das Desigualdades)
+Disciplina: Big Data e Analytics
+Tema 05: Acesso a Microcredito e Inclusao Financeira Regional
+Fonte: SCR.data - Sistema de Informacoes de Credito do Banco Central do Brasil
+ODS: 5 (Igualdade de Genero), 8 (Trabalho Decente), 10 (Reducao das Desigualdades)
 
----
-
-## Arquitetura da Solução
+## Arquitetura da solucao
 
 ```
-┌─────────────────────────────────┐
-│  Fonte: BCB — SCR.data          │
-│  scrdata_YYYY.zip (2021–2026)   │
-│  CSV mensal · Latin-1 · ; sep   │
-└──────────────┬──────────────────┘
-               │ submodalidade == "Microcrédito"
-               ▼
-┌─────────────────────────────────┐
-│  ETL — etl/etl_scr.py          │
-│  · Extração dos ZIPs em memória │
-│  · Filtro e limpeza (Pandas)    │
-│  · Conversão de tipos           │
-│  · Saída: microcredito_tratado  │
-│    .parquet (Snappy)            │
-└──────────────┬──────────────────┘
-               │ psycopg2 + SSL
-               ▼
-┌─────────────────────────────────┐
-│  PostgreSQL — Aiven Free Tier   │
-│  Tabela: fato_microcredito      │
-│  Provisionado via Terraform     │
-└──────────────┬──────────────────┘
-               │ (Marco 3)
-               ▼
-┌─────────────────────────────────┐
-│  Dashboard — Streamlit Cloud    │
-│  (a implementar no Marco 3)     │
-└─────────────────────────────────┘
++----------------------------------+
+|  Fonte: BCB - SCR.data           |
+|  scrdata_YYYY.zip (2021-2026)    |
+|  CSV mensal, UTF-8, sep ;        |
++---------------+------------------+
+                |  submodalidade == "Microcredito"
+                v
++----------------------------------+
+|  ETL - etl/etl_scr.py           |
+|  - Extracao dos ZIPs em memoria  |
+|  - Filtro e limpeza (Pandas)     |
+|  - Conversao de tipos            |
+|  - Saida: microcredito_tratado   |
+|    .parquet (Snappy)             |
++---------------+------------------+
+                |  psycopg2 + SSL
+                v
++----------------------------------+
+|  PostgreSQL - Aiven Free Tier    |
+|  Tabela: fato_microcredito       |
+|  Provisionado via Terraform      |
++---------------+------------------+
+                |  (Marco 3)
+                v
++----------------------------------+
+|  Dashboard - Streamlit Cloud     |
+|  (a implementar no Marco 3)      |
++----------------------------------+
 ```
 
----
-
-## 1. Dados Utilizados
+## 1. Dados utilizados
 
 | Item | Detalhe |
 |------|---------|
-| **Fonte** | Banco Central do Brasil — [SCR.data](https://www.bcb.gov.br/estabilidadefinanceira/scrdata) |
-| **Formato de origem** | CSV mensal compactado em ZIP (`scrdata_AAAA.zip`) |
-| **Encoding** | Latin-1 · Separador `;` |
-| **Período** | Janeiro/2021 a Agosto/2026 (6 arquivos ZIP, ~12 CSVs cada) |
-| **Granularidade** | Agregado por UF × Segmento × Porte × Modalidade × Mês |
-| **Filtro aplicado** | `submodalidade == "Microcrédito"` |
-| **Volume bruto estimado** | ~280 mil linhas/CSV × 12 × 6 anos ≈ 20 M linhas totais |
-| **Volume após filtro** | ~150–300 mil linhas (estimativa; microcrédito é nicho pequeno) |
+| Fonte | Banco Central do Brasil - [SCR.data](https://www.bcb.gov.br/estabilidadefinanceira/scrdata) |
+| Formato de origem | CSV mensal compactado em ZIP (`scrdata_AAAA.zip`) |
+| Encoding | UTF-8 com BOM, separador `;` |
+| Periodo | Janeiro/2021 a Julho/2026 (6 arquivos ZIP, ~12 CSVs cada) |
+| Granularidade | Agregado por UF x Segmento x Porte x Modalidade x Mes |
+| Filtro aplicado | `submodalidade == "Microcredito"` |
+| Volume bruto estimado | ~280 mil linhas por CSV, cerca de 20 milhoes no total |
+| Volume apos filtro | 598.002 linhas carregadas no banco |
 
-### Análise dos 5 V's
+### Analise dos 5 Vs
 
-| V | Avaliação |
+| V | Avaliacao |
 |---|-----------|
-| **Volume** | Arquivos ZIP somam ~950 MB. Após filtro microcrédito o dataset cabe em 1 GB do Aiven Free Tier. |
-| **Variedade** | Dados estruturados (CSV tabular). Colunas categóricas (UF, segmento, porte) + numéricas (carteiras, inadimplência). |
-| **Velocidade** | Batch mensal publicado pelo BCB. Pipeline reproduzível via script local + GitHub Actions (futuro). |
-| **Veracidade** | Fonte oficial regulatória. ETL remove nulos em chaves obrigatórias e elimina duplicatas. |
-| **Valor** | Permite cruzar acesso ao microcrédito por região/porte/segmento — revelando desigualdades de inclusão financeira. |
+| Volume | Os ZIPs somam cerca de 950 MB. Depois de filtrar so microcredito, o dataset cabe dentro do limite de 1 GB do Aiven Free Tier. |
+| Variedade | Dados estruturados em CSV tabular, com colunas categoricas (UF, segmento, porte) e numericas (carteiras, inadimplencia). |
+| Velocidade | O BCB publica a base mensalmente em lote. O pipeline pode ser agendado via GitHub Actions para rodar automaticamente. |
+| Veracidade | Fonte oficial e regulatoria. O ETL remove nulos nas colunas obrigatorias e elimina duplicatas antes da carga. |
+| Valor | Cruzando os dados por regiao, porte e segmento da instituicao, da pra identificar onde o acesso ao microcredito e mais restrito e para quem. |
 
-### Tipos de Dados
+### Tipos de dados
 
-- **Estruturados:** tabelas CSV com esquema fixo — 24 colunas definidas pelo BCB
-- **Semi-estruturados:** metadados dos ZIPs (nomes de arquivos com data implícita)
-- **Não estruturados:** ausentes nesta base
+- Estruturados: tabelas CSV com esquema fixo, 24 colunas definidas pelo BCB
+- Semi-estruturados: metadados dos ZIPs (nomes de arquivo carregam o mes de referencia)
+- Nao estruturados: nao existem nesta base
 
----
+## 2. Tratamento realizado
 
-## 2. Tratamento Realizado
+### Problemas identificados e decisoes tomadas
 
-### Problemas identificados
-
-| Problema | Decisão |
+| Problema | Decisao |
 |----------|---------|
-| Encoding Latin-1 | Leitura explícita com `encoding="latin-1"` |
-| BOM (`﻿`) no cabeçalho | Strip + `lstrip("﻿")` no nome das colunas |
-| Valores monetários como string (`"255.934,78"`) | Remove ponto de milhar → troca vírgula por ponto → `float` |
-| `numero_de_operacoes` como string | `pd.to_numeric` → `Int64` (suporta `NaN`) |
-| Linhas com UF, segmento ou data nulos | Descarte (`dropna` em chaves obrigatórias) |
-| Duplicatas | `drop_duplicates()` |
+| Encoding UTF-8 com BOM | Leitura com `encoding="utf-8-sig"`, que ja remove o BOM automaticamente |
+| Valores monetarios como string (`"255.934,78"`) | Remove o ponto de milhar, troca virgula por ponto, converte para `float` |
+| `numero_de_operacoes` como string | `pd.to_numeric` convertido para `Int64`, que aceita valores nulos |
+| Linhas com UF, segmento ou data nulos | Descarte via `dropna` nas colunas que sao chave da analise |
+| Duplicatas | Removidas com `drop_duplicates()` |
 
-### Transformações realizadas
+### Transformacoes aplicadas
 
-1. **Filtro:** `submodalidade == "Microcrédito"` — reduz volume em ~95 %
-2. **Normalização de colunas:** `strip().lower()` — elimina variações de espaço/capitalização
-3. **Conversão de datas:** `data_base` → `datetime64` (era string `"YYYY-MM-DD"`)
-4. **Conversão monetária:** 13 colunas de valores → `float64` (NUMERIC 18,2 no banco)
-5. **Saída compactada:** Parquet com Snappy (~8× menor que CSV)
+1. Filtro: `submodalidade == "Microcredito"` reduz o volume em cerca de 95%
+2. Normalizacao de colunas: `strip().lower()` elimina espacos e variacao de capitalização
+3. Conversao de datas: `data_base` para `datetime64` (chegava como string `"YYYY-MM-DD"`)
+4. Conversao monetaria: 13 colunas de valores para `float64` (salvas como NUMERIC 18,2 no banco)
+5. Saida compactada: Parquet com Snappy, cerca de 8 vezes menor que o CSV original
 
-### Justificativas
+### Por que essas escolhas
 
-- Parquet escolhido para saída intermediária por performance de leitura e compressão sem perda.
-- Carga idempotente com `TRUNCATE + INSERT` garante reprocessamentos sem duplicar dados.
-- Nenhum dado pessoal está presente (base é agregada por UF/segmento — LGPD não aplicável diretamente, mas segue boas práticas).
+O Parquet foi escolhido para a saida intermediaria porque a leitura e mais rapida e a compressao nao perde dados. A carga no banco usa `TRUNCATE + INSERT`, o que garante que rodar o ETL mais de uma vez nao cria registros duplicados. A base do BCB e agregada por UF e segmento, sem dados de pessoas fisicas identificaveis, entao nao ha risco de LGPD nessa etapa.
 
----
+## 3. Modelagem do banco de dados
 
-## 3. Modelagem do Banco de Dados
-
-### Estratégia: Tabela Fato Plana (Flat Star)
-
-Dado que o SCR.data já entrega dados **pré-agregados** (não registros individuais de operações), optou-se por uma única tabela fato desnormalizada. Isso simplifica as consultas analíticas e evita JOINs desnecessários dentro do limite de 1 GB.
+O SCR.data ja chega pre-agregado, sem registros individuais de operacoes de credito. Por isso optamos por uma tabela fato unica e desnormalizada. Criar tabelas de dimensao separadas adicionaria complexidade sem nenhum ganho real, especialmente dentro do limite de 1 GB do Free Tier.
 
 ### Tabela `fato_microcredito`
 
-| Coluna | Tipo | Descrição |
+| Coluna | Tipo | Descricao |
 |--------|------|-----------|
 | `id` | SERIAL PK | Chave substituta |
-| `data_base` | DATE | Competência da posição (último dia do mês) |
+| `data_base` | DATE | Competencia da posicao (ultimo dia do mes) |
 | `uf` | VARCHAR(2) | Unidade Federativa do tomador |
-| `segmento` | VARCHAR(100) | Tipo de instituição (Banco, Fintech, Cooperativa…) |
-| `cliente` | VARCHAR(20) | Pessoa Física (PF) ou Jurídica (PJ) |
-| `cnae_ocupacao` | VARCHAR(200) | Setor econômico / ocupação do tomador |
-| `porte` | VARCHAR(100) | Faixa de renda/porte (até 1 SM, micro, pequeno…) |
-| `modalidade` | VARCHAR(100) | Modalidade de crédito (Empréstimos, Financiamentos…) |
-| `submodalidade` | VARCHAR(100) | **Microcrédito** (filtrado) |
-| `origem` | VARCHAR(100) | Destinação do crédito |
-| `indexador` | VARCHAR(100) | Indexador da operação (Prefixado, IPCA…) |
+| `segmento` | VARCHAR(100) | Tipo de instituicao (Banco, Fintech, Cooperativa...) |
+| `cliente` | VARCHAR(20) | Pessoa Fisica (PF) ou Juridica (PJ) |
+| `cnae_ocupacao` | VARCHAR(200) | Setor economico ou ocupacao do tomador |
+| `porte` | VARCHAR(100) | Faixa de renda ou porte (ate 1 SM, micro, pequeno...) |
+| `modalidade` | VARCHAR(100) | Modalidade de credito (Emprestimos, Financiamentos...) |
+| `submodalidade` | VARCHAR(100) | Microcredito (valor filtrado) |
+| `origem` | VARCHAR(100) | Destinacao do credito |
+| `indexador` | VARCHAR(100) | Indexador da operacao (Prefixado, IPCA...) |
 | `numero_de_operacoes` | INTEGER | Quantidade de contratos ativos |
-| `a_vencer_ate_90_dias` | NUMERIC(18,2) | Carteira a vencer em até 90 dias (R$) |
-| `a_vencer_de_91_ate_360_dias` | NUMERIC(18,2) | Carteira a vencer 91–360 dias (R$) |
-| `a_vencer_de_361_ate_1080_dias` | NUMERIC(18,2) | Carteira a vencer 361–1080 dias (R$) |
-| `a_vencer_de_1081_ate_1800_dias` | NUMERIC(18,2) | Carteira a vencer 1081–1800 dias (R$) |
-| `a_vencer_de_1801_ate_5400_dias` | NUMERIC(18,2) | Carteira a vencer 1801–5400 dias (R$) |
+| `a_vencer_ate_90_dias` | NUMERIC(18,2) | Carteira a vencer em ate 90 dias (R$) |
+| `a_vencer_de_91_ate_360_dias` | NUMERIC(18,2) | Carteira a vencer entre 91 e 360 dias (R$) |
+| `a_vencer_de_361_ate_1080_dias` | NUMERIC(18,2) | Carteira a vencer entre 361 e 1080 dias (R$) |
+| `a_vencer_de_1081_ate_1800_dias` | NUMERIC(18,2) | Carteira a vencer entre 1081 e 1800 dias (R$) |
+| `a_vencer_de_1801_ate_5400_dias` | NUMERIC(18,2) | Carteira a vencer entre 1801 e 5400 dias (R$) |
 | `a_vencer_acima_de_5400_dias` | NUMERIC(18,2) | Carteira a vencer acima de 5400 dias (R$) |
 | `carteira_a_vencer` | NUMERIC(18,2) | Total a vencer (R$) |
-| `vencido_de_15_ate_90_dias` | NUMERIC(18,2) | Carteira vencida 15–90 dias (R$) |
-| `vencido_acima_de_90_dias` | NUMERIC(18,2) | Carteira vencida > 90 dias (R$) |
+| `vencido_de_15_ate_90_dias` | NUMERIC(18,2) | Carteira vencida entre 15 e 90 dias (R$) |
+| `vencido_acima_de_90_dias` | NUMERIC(18,2) | Carteira vencida acima de 90 dias (R$) |
 | `carteira_vencida` | NUMERIC(18,2) | Total vencido (R$) |
 | `carteira_ativa` | NUMERIC(18,2) | Carteira total ativa (R$) |
 | `carteira_inadimplencia` | NUMERIC(18,2) | Carteira inadimplente (R$) |
-| `ativo_problematico` | NUMERIC(18,2) | Ativo problemático (R$) |
-
-**Justificativa da modelagem:** Uma única tabela fato flat é adequada pois (i) o SCR.data já é uma tabela analítica agregada; (ii) evita JOINs que penalizam performance no Free Tier; (iii) todas as dimensões (UF, segmento, porte) são de baixa cardinalidade e cabem inline.
-
----
+| `ativo_problematico` | NUMERIC(18,2) | Ativo problematico (R$) |
 
 ## 4. Infraestrutura
 
 | Item | Detalhe |
 |------|---------|
-| **Provedor de nuvem** | Aiven for PostgreSQL — Free Tier (Hobbyist, 1 GB) |
-| **Região** | `google-southamerica-east1` (São Paulo) |
-| **Versão** | PostgreSQL 16 |
-| **IaC** | Terraform ≥ 1.5 · Provider `aiven/aiven ~> 4.0` |
-| **Arquivos** | `terraform/main.tf`, `terraform/variables.tf`, `terraform/outputs.tf` |
-| **Credenciais** | Token Aiven via variável Terraform (`sensitive = true`). URI do banco via `.env` local (nunca versionado). |
+| Provedor | Aiven for PostgreSQL, plano Free Tier (Hobbyist, 1 GB) |
+| Regiao | `google-southamerica-east1` (Sao Paulo) |
+| Versao | PostgreSQL 16 |
+| IaC | Terraform >= 1.5, provider `aiven/aiven ~> 4.0` |
+| Arquivos | `terraform/main.tf`, `terraform/variables.tf`, `terraform/outputs.tf` |
+| Credenciais | Token Aiven via variavel Terraform marcada como `sensitive`. URI do banco via `.env` local, nunca versionado. |
 
-### Segurança
+### Seguranca
 
-- Credenciais de banco (host, porta, senha) mantidas em `.env` local — **não versionadas** (`.gitignore` bloqueia `*.env`).
-- Token da API Aiven passado via `secrets.tfvars` ou variável de ambiente `TF_VAR_aiven_api_token` — arquivo bloqueado no `.gitignore`.
-- Repositório público não contém nenhuma credencial, chave ou token.
+As credenciais do banco (host, porta, senha) ficam so no `.env` local, que esta no `.gitignore`. O token da API Aiven e passado via `secrets.tfvars`, tambem bloqueado no `.gitignore`. O repositorio publico nao tem nenhuma senha, chave ou token.
 
----
+## 5. Como rodar
 
-## 5. Execução (Guia Passo a Passo)
+### Pre-requisitos
 
-### Pré-requisitos
+- Python 3.11 ou superior
+- Terraform 1.5 ou superior
+- Conta gratuita na [Aiven](https://aiven.io) com um projeto criado
+- ZIPs do SCR.data na raiz do projeto (`scrdata_2021.zip` ate `scrdata_2026.zip`)
 
-- Python ≥ 3.11
-- Terraform ≥ 1.5
-- Conta gratuita na [Aiven](https://aiven.io) com projeto criado
-- ZIPs do SCR.data na raiz do projeto (`scrdata_2021.zip` … `scrdata_2026.zip`)
-
-### Passo 1 — Instalar dependências Python
+### Passo 1: instalar as dependencias Python
 
 ```bash
 cd etl
 pip install -r requirements.txt
 ```
 
-### Passo 2 — Provisionar o banco com Terraform
+### Passo 2: provisionar o banco com Terraform
 
 ```bash
 cd terraform
 
-# Crie o arquivo de variáveis (não commite este arquivo)
+# Crie o arquivo de variaveis (nao commite este arquivo)
 cat > secrets.tfvars <<EOF
 aiven_api_token    = "SEU_TOKEN_AIVEN"
 aiven_project_name = "NOME_DO_SEU_PROJETO"
@@ -192,32 +171,31 @@ terraform init
 terraform plan -var-file="secrets.tfvars"
 terraform apply -var-file="secrets.tfvars"
 
-# Obter a URI de conexão
+# Pegar a URI de conexao
 terraform output -raw service_uri
 ```
 
-### Passo 3 — Configurar variável de ambiente
+### Passo 3: configurar o arquivo .env
 
 ```bash
 cd etl
 cp .env.example .env
-# Edite .env e cole a URI obtida no passo anterior
+# Abra o .env e cole a URI que o Terraform gerou
 ```
 
-### Passo 4 — Executar o ETL
+### Passo 4: rodar o ETL
 
 ```bash
-# Apenas tratar e salvar parquet (sem banco)
+# So tratar e salvar o parquet, sem subir pro banco
 python etl_scr.py
 
-# Tratar + carregar no PostgreSQL
+# Tratar e carregar no PostgreSQL
 python etl_scr.py --load-db
 ```
 
-### Passo 5 — Verificar a carga
+### Passo 5: confirmar a carga
 
 ```sql
--- Conecte no banco e execute:
 SELECT COUNT(*) FROM fato_microcredito;
 SELECT data_base, uf, segmento, carteira_ativa
 FROM fato_microcredito
@@ -225,34 +203,30 @@ ORDER BY data_base DESC
 LIMIT 10;
 ```
 
----
-
-## Estrutura do Repositório
+## Estrutura do repositorio
 
 ```
 big-data-microcredito/
 ├── etl/
 │   ├── etl_scr.py             # Script ETL principal
-│   ├── requirements.txt       # Dependências Python
-│   └── .env.example           # Template de variáveis de ambiente
+│   ├── requirements.txt       # Dependencias Python
+│   └── .env.example           # Template das variaveis de ambiente
 ├── terraform/
 │   ├── main.tf                # Recurso PostgreSQL Aiven
-│   ├── variables.tf           # Variáveis de entrada
-│   └── outputs.tf             # URI e conexão do banco
-├── dashboard/                 # (Marco 3 — Streamlit)
+│   ├── variables.tf           # Variaveis de entrada
+│   └── outputs.tf             # URI e dados de conexao do banco
+├── dashboard/                 # (Marco 3 - Streamlit)
 ├── .gitignore
 └── README.md
 ```
 
----
+## Decisoes tecnicas
 
-## Decisões Técnicas Adotadas
-
-| Decisão | Justificativa |
-|---------|---------------|
-| Filtrar por `submodalidade` (não `modalidade`) | A modalidade "Microcrédito" aparece somente na submodalidade; a modalidade principal é "Empréstimos" |
-| Pandas para ETL (não PySpark) | Volume pós-filtro cabe em RAM (~300 mil linhas); Pandas é suficiente e sem overhead de cluster |
-| Parquet + Snappy como formato intermediário | ~8× mais compacto que CSV; leitura mais rápida no Marco 3 (dashboard) |
-| Tabela fato flat (sem dimensões separadas) | Dados já agregados pelo BCB; JOINs adicionariam complexidade sem ganho para o volume atual |
-| Carga idempotente (TRUNCATE + INSERT) | Permite reprocessar o ETL a qualquer momento sem duplicar dados |
-| PostgreSQL Aiven Free Tier | Atende o requisito da disciplina; 1 GB suficiente para o subconjunto microcrédito |
+| Decisao | Motivo |
+|---------|--------|
+| Filtrar por `submodalidade` e nao por `modalidade` | O microcredito aparece so na submodalidade; na modalidade o campo e "Emprestimos" |
+| Pandas no lugar de PySpark | Com 598 mil linhas pos-filtro, o Pandas resolve sem precisar de cluster |
+| Parquet com Snappy como saida intermediaria | Ocupa cerca de 8 vezes menos que CSV e carrega mais rapido no dashboard |
+| Tabela fato unica sem dimensoes separadas | Os dados ja chegam agregados do BCB; tabelas de dimensao nao trariam ganho nenhum aqui |
+| Carga com TRUNCATE antes do INSERT | Permite reprocessar o ETL quantas vezes precisar sem duplicar linhas |
+| PostgreSQL no Aiven Free Tier | Atende o requisito da disciplina e 1 GB e suficiente para o volume de microcredito |

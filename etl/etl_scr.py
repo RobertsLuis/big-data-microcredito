@@ -1,5 +1,5 @@
 """
-ETL — SCR.data (Banco Central) → Microcrédito
+ETL - SCR.data (Banco Central) - Microcredito
 Filtra submodalidade == 'Microcrédito', converte tipos, salva parquet e carrega no PostgreSQL Aiven.
 
 Uso:
@@ -26,11 +26,11 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# ── Caminhos ──────────────────────────────────────────────────────────────────
+# Caminhos
 ROOT_DIR = Path(__file__).resolve().parent.parent
 OUTPUT_PARQUET = Path(__file__).resolve().parent / "microcredito_tratado.parquet"
 
-# ── Colunas monetárias que chegam como string com vírgula decimal ─────────────
+# Colunas monetarias que chegam como string com virgula decimal
 MONETARY_COLS = [
     "a_vencer_ate_90_dias",
     "a_vencer_de_91_ate_360_dias",
@@ -47,7 +47,7 @@ MONETARY_COLS = [
     "ativo_problematico",
 ]
 
-# ── Colunas que vão para o banco (mesma ordem do CREATE TABLE) ─────────────────
+# Colunas que vao para o banco (mesma ordem do CREATE TABLE)
 DB_COLS = [
     "data_base", "uf", "segmento", "cliente", "cnae_ocupacao", "porte",
     "modalidade", "submodalidade", "origem", "indexador",
@@ -55,19 +55,19 @@ DB_COLS = [
 ]
 
 
-# ── Leitura ───────────────────────────────────────────────────────────────────
+# Leitura
 
 def _read_csv_from_zip(zf: zipfile.ZipFile, name: str) -> pd.DataFrame:
     with zf.open(name) as raw:
         df = pd.read_csv(
             raw,
             sep=";",
-            encoding="latin-1",
+            encoding="utf-8-sig",
             dtype=str,
             na_values=["", "NA", "N/A", "Indisponível"],
         )
-    # Normalizar nomes de colunas (BOM e espaços)
-    df.columns = [c.strip().lstrip("﻿").lower() for c in df.columns]
+    # Normalizar nomes de colunas (espaços)
+    df.columns = [c.strip().lower() for c in df.columns]
     return df[df["submodalidade"] == "Microcrédito"].copy()
 
 
@@ -82,11 +82,11 @@ def extract(zip_files: list[Path]) -> pd.DataFrame:
                 log.info(f"  {name}: {len(chunk):,} linhas de microcrédito")
                 frames.append(chunk)
     if not frames:
-        raise RuntimeError("Nenhum dado encontrado — verifique os ZIPs no diretório raiz.")
+        raise RuntimeError("Nenhum dado encontrado. Verifique os ZIPs no diretorio raiz.")
     return pd.concat(frames, ignore_index=True)
 
 
-# ── Transformação ─────────────────────────────────────────────────────────────
+# Transformacao
 
 def transform(df: pd.DataFrame) -> pd.DataFrame:
     log.info(f"Transformando {len(df):,} linhas ...")
@@ -99,8 +99,8 @@ def transform(df: pd.DataFrame) -> pd.DataFrame:
         if col in df.columns:
             df[col] = (
                 df[col]
-                .str.replace(".", "", regex=False)   # separador de milhar
-                .str.replace(",", ".", regex=False)   # decimal
+                .str.replace(".", "", regex=False)
+                .str.replace(",", ".", regex=False)
                 .pipe(pd.to_numeric, errors="coerce")
             )
 
@@ -120,7 +120,7 @@ def transform(df: pd.DataFrame) -> pd.DataFrame:
     return df[colunas_presentes].reset_index(drop=True)
 
 
-# ── Carga no PostgreSQL ───────────────────────────────────────────────────────
+# Carga no PostgreSQL
 
 def _create_table(cur) -> None:
     cur.execute("""
@@ -180,7 +180,7 @@ def load(df: pd.DataFrame) -> None:
     def _safe(v):
         if pd.isna(v):
             return None
-        # pandas Int64 para int nativo
+        # converte pandas Int64 para int nativo do Python
         if hasattr(v, "item"):
             return v.item()
         return v
@@ -195,7 +195,7 @@ def load(df: pd.DataFrame) -> None:
     conn.close()
 
 
-# ── Ponto de entrada ──────────────────────────────────────────────────────────
+# Ponto de entrada
 
 def main() -> None:
     load_db = "--load-db" in sys.argv

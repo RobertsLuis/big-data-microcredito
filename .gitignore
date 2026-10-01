@@ -1,10 +1,10 @@
-# Dados brutos — não versionar (arquivos grandes)
+# Dados brutos - nao versionar (arquivos grandes)
 *.zip
 *.csv
 etl/*.parquet
 etl/*.csv
 
-# Credenciais — NUNCA commitar
+# Credenciais - NUNCA commitar
 .env
 *.env
 secrets.tfvars
