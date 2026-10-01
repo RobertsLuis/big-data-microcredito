@@ -1,0 +1,33 @@
+# Dados brutos — não versionar (arquivos grandes)
+*.zip
+*.csv
+etl/*.parquet
+etl/*.csv
+
+# Credenciais — NUNCA commitar
+.env
+*.env
+secrets.tfvars
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Terraform state e cache
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+*.tfplan
+
+# IDEs
+.vscode/
+.idea/
+*.iml
+
+# macOS
+.DS_Store
