@@ -31,3 +31,7 @@ terraform.tfstate.backup
 
 # macOS
 .DS_Store
+
+# Ferramentas internas - nao versionar
+.superpowers/
+docs/superpowers/
