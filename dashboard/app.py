@@ -45,11 +45,18 @@ filtros = {
 }
 
 st.title("Microcredito no Brasil")
-st.caption(f"SCR.data - Banco Central do Brasil · {anos[0]} a {anos[1]}")
 
 kpis = get_kpis(filtros)
 atual = kpis["atual"]
 ant = kpis["anterior"]
+data_ref = kpis["data_ref"]
+data_ref_txt = f"{data_ref:%m/%Y}" if data_ref else "sem dados"
+
+st.caption(
+    f"SCR.data - Banco Central do Brasil · periodo {anos[0]} a {anos[1]} · "
+    f"posicao em {data_ref_txt} (saldos na data-base, nao acumulados) · "
+    "operacoes com contagem suprimida (-1) ficam fora do total"
+)
 
 
 def variacao(v_atual, v_ant):
@@ -62,7 +69,7 @@ def fmt_delta(pct):
     if pct is None:
         return None
     sinal = "+" if pct >= 0 else ""
-    return f"{sinal}{pct:.1f}% vs ano anterior"
+    return f"{sinal}{pct:.1f}% vs mesmo mes do ano anterior"
 
 
 c1, c2, c3, c4 = st.columns(4)
@@ -87,7 +94,7 @@ with c4:
 st.divider()
 metrica_sql = METRIC_SQL[metrica]
 
-# Grafico 1: evolucao anual
+# Grafico 1: posicao no fim de cada ano
 evolucao = get_evolucao_anual(metrica_sql, filtros)
 if evolucao:
     anos_vals = [r["ano"] for r in evolucao]
@@ -102,7 +109,7 @@ if evolucao:
         hovertemplate="Ano: %{x}<br>%{y:,.2f}<extra></extra>",
     ))
     fig_ev.update_layout(
-        title=f"Evolucao anual — {metrica}",
+        title=f"Posicao no fim de cada ano — {metrica}",
         xaxis_title="Ano",
         yaxis_title=metrica,
         plot_bgcolor="#1e293b",
@@ -133,7 +140,7 @@ with col_uf:
             hovertemplate="%{y}: %{x:,.2f}<extra></extra>",
         ))
         fig_uf.update_layout(
-            title=f"Top 10 UFs — {metrica}",
+            title=f"Top 10 UFs — {metrica} ({data_ref_txt})",
             plot_bgcolor="#1e293b",
             paper_bgcolor="#0f172a",
             font_color="#e2e8f0",
@@ -156,7 +163,7 @@ with col_porte:
             hovertemplate="%{x}: %{y:,.2f}<extra></extra>",
         ))
         fig_porte.update_layout(
-            title=f"Por Porte — {metrica}",
+            title=f"Por Porte — {metrica} ({data_ref_txt})",
             plot_bgcolor="#1e293b",
             paper_bgcolor="#0f172a",
             font_color="#e2e8f0",
