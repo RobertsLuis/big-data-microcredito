@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Todas as medidas abaixo sao POSICAO (estoque) na data-base: nunca somar meses.
 METRIC_SQL = {
     "Num. Operacoes":    "SUM(numero_de_operacoes)",
     "Carteira Ativa":    "SUM(carteira_ativa)",
@@ -15,7 +16,20 @@ METRIC_SQL = {
 }
 
 
+def _get_conn():
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        try:
+            url = st.secrets["DATABASE_URL"]
+        except Exception:
+            pass
+    if not url:
+        raise RuntimeError("DATABASE_URL nao configurado.")
+    return psycopg2.connect(url)
+
+
 def _dim_filters(filtros: dict, params: list) -> str:
+    """Filtros de dimensao (sem data). Acrescenta os valores em params, na ordem dos %s."""
     clauses = ["TRUE"]
     if filtros.get("ufs"):
         clauses.append("uf = ANY(%s)")
@@ -43,6 +57,7 @@ def _data_ref(cur, ano_inicio: int, ano_fim: int):
 
 
 def _data_mesmo_mes_ano_anterior(cur, data_ref):
+    """Data-base do mesmo mes, um ano antes (None se nao existir)."""
     if data_ref is None:
         return None
     cur.execute(
@@ -58,17 +73,32 @@ def _snapshot_where(cur, filtros: dict, params: list) -> str:
     return "data_base = %s AND " + _dim_filters(filtros, params)
 
 
+@st.cache_data(ttl=3600)
+def get_filter_options() -> dict:
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT DISTINCT uf FROM fato_microcredito WHERE uf IS NOT NULL ORDER BY 1")
+    ufs = [r[0] for r in cur.fetchall()]
+    cur.execute("SELECT DISTINCT segmento FROM fato_microcredito WHERE segmento IS NOT NULL ORDER BY 1")
+    segmentos = [r[0] for r in cur.fetchall()]
+    cur.execute("SELECT DISTINCT porte FROM fato_microcredito WHERE porte IS NOT NULL ORDER BY 1")
+    portes = [r[0] for r in cur.fetchall()]
+    conn.close()
+    return {"ufs": ufs, "segmentos": segmentos, "portes": portes}
+
+
 def _fetch_kpi_block(cur, data_base, filtros: dict) -> dict:
     if data_base is None:
         return {"carteira_ativa": 0.0, "inadimplencia_pct": 0.0, "num_operacoes": 0, "ticket_medio": 0.0}
     params = [data_base]
     dim = _dim_filters(filtros, params)
+    ticket_sql = METRIC_SQL["Ticket Medio (R$)"]
     cur.execute(f"""
         SELECT
             SUM(carteira_ativa),
             ROUND(SUM(carteira_inadimplencia)::numeric / NULLIF(SUM(carteira_ativa), 0) * 100, 2),
             SUM(numero_de_operacoes),
-            {METRIC_SQL["Ticket Medio (R$)"]}
+            {ticket_sql}
         FROM fato_microcredito
         WHERE data_base = %s AND {dim}
     """, params)
