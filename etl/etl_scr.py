@@ -2,16 +2,23 @@
 ETL - SCR.data (Banco Central) - Microcredito
 Filtra submodalidade == 'Microcrédito', converte tipos, salva parquet e carrega no PostgreSQL Aiven.
 
+Alem da base tratada, gera evidencias para a documentacao em docs/:
+  - relatorio_etl.json     : arquivos de origem (nome, tamanho, SHA-256), linhas por CSV e por etapa
+  - amostra_original.csv   : 20 linhas sorteadas (seed fixa) como chegaram do BCB
+  - amostra_tratada.csv    : as mesmas linhas apos o tratamento (as que sobreviveram)
+
 Uso:
-    python etl_scr.py              # trata e salva parquet (sem banco)
-    python etl_scr.py --load-db    # trata, salva parquet e carrega no banco
+    python etl_scr.py              # trata e salva parquet + evidencias (sem banco)
+    python etl_scr.py --load-db    # idem, e carrega no banco
 """
 
 import os
-import io
 import sys
+import json
+import hashlib
 import zipfile
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -27,8 +34,11 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # Caminhos
-ROOT_DIR = Path(__file__).resolve().parent.parent
-OUTPUT_PARQUET = Path(__file__).resolve().parent / "microcredito_tratado.parquet"
+ETL_DIR = Path(__file__).resolve().parent
+ROOT_DIR = ETL_DIR.parent
+DOCS_DIR = ROOT_DIR / "docs"
+SCHEMA_SQL = ROOT_DIR / "sql" / "schema.sql"
+OUTPUT_PARQUET = ETL_DIR / "microcredito_tratado.parquet"
 
 # Colunas monetarias que chegam como string com virgula decimal
 MONETARY_COLS = [
@@ -47,17 +57,27 @@ MONETARY_COLS = [
     "ativo_problematico",
 ]
 
-# Colunas que vao para o banco (mesma ordem do CREATE TABLE)
+# Colunas que vao para o banco (mesma ordem de sql/schema.sql)
 DB_COLS = [
     "data_base", "uf", "segmento", "cliente", "cnae_ocupacao", "porte",
     "modalidade", "submodalidade", "origem", "indexador",
-    "numero_de_operacoes", *MONETARY_COLS,
+    "numero_de_operacoes", "ops_suprimido", *MONETARY_COLS,
 ]
+
+
+# Utilidades
+
+def _sha256(path: Path, bloco: int = 1 << 20) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(bloco), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 # Leitura
 
-def _read_csv_from_zip(zf: zipfile.ZipFile, name: str) -> pd.DataFrame:
+def _read_csv_from_zip(zf: zipfile.ZipFile, name: str) -> tuple[pd.DataFrame, int]:
     with zf.open(name) as raw:
         df = pd.read_csv(
             raw,
@@ -68,28 +88,44 @@ def _read_csv_from_zip(zf: zipfile.ZipFile, name: str) -> pd.DataFrame:
         )
     # Normalizar nomes de colunas (espaços)
     df.columns = [c.strip().lower() for c in df.columns]
-    return df[df["submodalidade"] == "Microcrédito"].copy()
+    total = len(df)
+    return df[df["submodalidade"] == "Microcrédito"].copy(), total
 
 
-def extract(zip_files: list[Path]) -> pd.DataFrame:
+def extract(zip_files: list[Path]) -> tuple[pd.DataFrame, list[dict]]:
     frames = []
+    por_csv = []
     for zp in zip_files:
         log.info(f"Lendo {zp.name} ...")
         with zipfile.ZipFile(zp) as zf:
             csv_names = [n for n in zf.namelist() if n.endswith(".csv")]
             for name in sorted(csv_names):
-                chunk = _read_csv_from_zip(zf, name)
-                log.info(f"  {name}: {len(chunk):,} linhas de microcrédito")
+                chunk, total = _read_csv_from_zip(zf, name)
+                log.info(f"  {name}: {len(chunk):,} de {total:,} linhas são microcrédito")
+                por_csv.append({
+                    "zip": zp.name,
+                    "csv": name,
+                    "linhas_csv": total,
+                    "linhas_microcredito": len(chunk),
+                })
                 frames.append(chunk)
     if not frames:
         raise RuntimeError("Nenhum dado encontrado. Verifique os ZIPs no diretorio raiz.")
-    return pd.concat(frames, ignore_index=True)
+    return pd.concat(frames, ignore_index=True), por_csv
 
 
 # Transformacao
 
-def transform(df: pd.DataFrame) -> pd.DataFrame:
+def transform(df: pd.DataFrame, stats: dict) -> pd.DataFrame:
     log.info(f"Transformando {len(df):,} linhas ...")
+    stats["linhas_apos_filtro_microcredito"] = len(df)
+
+    # Amostra da versao ORIGINAL (strings como chegaram), com seed fixa
+    DOCS_DIR.mkdir(exist_ok=True)
+    amostra_idx = df.sample(min(20, len(df)), random_state=42).index
+    df.loc[amostra_idx].to_csv(
+        DOCS_DIR / "amostra_original.csv", sep=";", index=False, encoding="utf-8-sig"
+    )
 
     # Data
     df["data_base"] = pd.to_datetime(df["data_base"], errors="coerce")
@@ -104,57 +140,56 @@ def transform(df: pd.DataFrame) -> pd.DataFrame:
                 .pipe(pd.to_numeric, errors="coerce")
             )
 
-    # Inteiro
-    df["numero_de_operacoes"] = pd.to_numeric(
-        df["numero_de_operacoes"], errors="coerce"
-    ).astype("Int64")
+    # Numero de operacoes: valor negativo (-1) nao e contagem real.
+    # A Metodologia V2 do SCR.data nao documenta o -1; a equipe o interpreta como
+    # contagem suprimida. Mantemos a linha (a carteira em R$ continua valida),
+    # registramos a flag e deixamos a contagem como NULL.
+    ops = pd.to_numeric(df["numero_de_operacoes"], errors="coerce")
+    suprimido = (ops < 0).fillna(False)
+    stats["numero_de_operacoes"] = {
+        "linhas_menos_um": int((ops == -1).sum()),
+        "linhas_negativas_total": int(suprimido.sum()),
+        "linhas_zero": int((ops == 0).sum()),
+        "linhas_nulas_na_origem": int(ops.isna().sum()),
+        "carteira_ativa_nas_linhas_suprimidas": (
+            float(df.loc[suprimido, "carteira_ativa"].sum())
+            if "carteira_ativa" in df.columns else None
+        ),
+    }
+    df["ops_suprimido"] = suprimido
+    df["numero_de_operacoes"] = ops.mask(suprimido).astype("Int64")
+    n_sup = int(suprimido.sum())
+    log.info(f"{n_sup:,} linhas ({n_sup / len(df):.1%}) com contagem suprimida (-1) -> NULL + flag")
 
-    # Remover nulos em chaves obrigatórias
-    antes = len(df)
-    df.dropna(subset=["data_base", "uf", "segmento"], inplace=True)
-    df.drop_duplicates(inplace=True)
-    log.info(f"Removidas {antes - len(df):,} linhas nulas/duplicadas. Restam {len(df):,}.")
+    # Remover nulos em chaves obrigatórias e duplicatas (contadas separadamente)
+    n0 = len(df)
+    nulos = df[["data_base", "uf", "segmento"]].isna().any(axis=1)
+    df = df.loc[~nulos]
+    n1 = len(df)
+    df = df.drop_duplicates()
+    stats["removidas_por_nulo_em_chave"] = n0 - n1
+    stats["removidas_por_duplicata"] = n1 - len(df)
+    log.info(
+        f"Removidas {n0 - n1:,} linhas com nulo em chave (data_base/uf/segmento) "
+        f"e {n1 - len(df):,} duplicatas. Restam {len(df):,}."
+    )
 
     # Garantir que só colunas necessárias sejam retidas
     colunas_presentes = [c for c in DB_COLS if c in df.columns]
-    return df[colunas_presentes].reset_index(drop=True)
+    out = df[colunas_presentes]
+
+    # Amostra da versao TRATADA (as mesmas linhas que sobreviveram)
+    out.loc[out.index.intersection(amostra_idx)].to_csv(
+        DOCS_DIR / "amostra_tratada.csv", sep=";", index=False, encoding="utf-8-sig"
+    )
+
+    stats["linhas_finais"] = len(out)
+    return out.reset_index(drop=True)
 
 
 # Carga no PostgreSQL
 
-def _create_table(cur) -> None:
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS fato_microcredito (
-            id                          SERIAL PRIMARY KEY,
-            data_base                   DATE          NOT NULL,
-            uf                          VARCHAR(2),
-            segmento                    VARCHAR(100),
-            cliente                     VARCHAR(20),
-            cnae_ocupacao               VARCHAR(200),
-            porte                       VARCHAR(100),
-            modalidade                  VARCHAR(100),
-            submodalidade               VARCHAR(100),
-            origem                      VARCHAR(100),
-            indexador                   VARCHAR(100),
-            numero_de_operacoes         INTEGER,
-            a_vencer_ate_90_dias        NUMERIC(18,2),
-            a_vencer_de_91_ate_360_dias NUMERIC(18,2),
-            a_vencer_de_361_ate_1080_dias NUMERIC(18,2),
-            a_vencer_de_1081_ate_1800_dias NUMERIC(18,2),
-            a_vencer_de_1801_ate_5400_dias NUMERIC(18,2),
-            a_vencer_acima_de_5400_dias NUMERIC(18,2),
-            carteira_a_vencer           NUMERIC(18,2),
-            vencido_de_15_ate_90_dias   NUMERIC(18,2),
-            vencido_acima_de_90_dias    NUMERIC(18,2),
-            carteira_vencida            NUMERIC(18,2),
-            carteira_ativa              NUMERIC(18,2),
-            carteira_inadimplencia      NUMERIC(18,2),
-            ativo_problematico          NUMERIC(18,2)
-        );
-    """)
-
-
-def load(df: pd.DataFrame) -> None:
+def load(df: pd.DataFrame) -> int:
     try:
         import psycopg2
         from psycopg2.extras import execute_values
@@ -167,20 +202,23 @@ def load(df: pd.DataFrame) -> None:
         log.error("Variável DATABASE_URL não definida. Configure o arquivo .env.")
         sys.exit(1)
 
-    log.info("Conectando ao PostgreSQL Aiven ...")
-    conn = psycopg2.connect(db_url, sslmode="require")
+    log.info("Conectando ao PostgreSQL ...")
+    # A URI do Aiven ja traz sslmode=require; so forcamos se nao estiver na URL
+    kwargs = {} if "sslmode=" in db_url else {"sslmode": "require"}
+    conn = psycopg2.connect(db_url, **kwargs)
     cur = conn.cursor()
 
-    _create_table(cur)
+    # Fonte unica do esquema: sql/schema.sql
+    cur.execute(SCHEMA_SQL.read_text(encoding="utf-8"))
     cur.execute("TRUNCATE TABLE fato_microcredito RESTART IDENTITY;")
-    log.info("Tabela truncada para recarga limpa.")
+    log.info("Esquema aplicado e tabela truncada para recarga limpa.")
 
     cols = [c for c in DB_COLS if c in df.columns]
 
     def _safe(v):
         if pd.isna(v):
             return None
-        # converte pandas Int64 para int nativo do Python
+        # converte tipos numpy/pandas para tipos nativos do Python
         if hasattr(v, "item"):
             return v.item()
         return v
@@ -190,9 +228,13 @@ def load(df: pd.DataFrame) -> None:
     sql = f"INSERT INTO fato_microcredito ({', '.join(cols)}) VALUES %s"
     execute_values(cur, sql, records, page_size=2000)
     conn.commit()
-    log.info(f"{len(records):,} linhas carregadas com sucesso.")
+
+    cur.execute("SELECT COUNT(*) FROM fato_microcredito")
+    n_banco = cur.fetchone()[0]
+    log.info(f"{len(records):,} linhas enviadas; {n_banco:,} linhas confirmadas no banco.")
     cur.close()
     conn.close()
+    return n_banco
 
 
 # Ponto de entrada
@@ -206,17 +248,34 @@ def main() -> None:
         sys.exit(1)
     log.info(f"Encontrados {len(zip_files)} ZIPs: {[z.name for z in zip_files]}")
 
-    raw = extract(zip_files)
-    treated = transform(raw)
+    stats: dict = {
+        "executado_em_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "arquivos_origem": [
+            {"arquivo": z.name, "tamanho_bytes": z.stat().st_size, "sha256": _sha256(z)}
+            for z in zip_files
+        ],
+    }
 
-    OUTPUT_PARQUET.parent.mkdir(exist_ok=True)
+    raw, por_csv = extract(zip_files)
+    stats["por_csv"] = por_csv
+    stats["linhas_csv_total"] = sum(r["linhas_csv"] for r in por_csv)
+
+    treated = transform(raw, stats)
+
     treated.to_parquet(OUTPUT_PARQUET, index=False, compression="snappy")
-    log.info(f"Parquet salvo em {OUTPUT_PARQUET} ({OUTPUT_PARQUET.stat().st_size / 1e6:.1f} MB)")
+    tamanho_mb = OUTPUT_PARQUET.stat().st_size / 1e6
+    stats["parquet"] = {"arquivo": OUTPUT_PARQUET.name, "tamanho_mb": round(tamanho_mb, 1)}
+    log.info(f"Parquet salvo em {OUTPUT_PARQUET} ({tamanho_mb:.1f} MB)")
 
     if load_db:
-        load(treated)
+        stats["linhas_no_banco"] = load(treated)
     else:
-        log.info("Pule a carga no banco. Para carregar, rode: python etl_scr.py --load-db")
+        log.info("Carga no banco ignorada. Para carregar, rode: python etl_scr.py --load-db")
+
+    (DOCS_DIR / "relatorio_etl.json").write_text(
+        json.dumps(stats, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    log.info(f"Relatorio salvo em {DOCS_DIR / 'relatorio_etl.json'}")
 
 
 if __name__ == "__main__":
